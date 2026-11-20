@@ -113,6 +113,14 @@
         <button class="view-btn active" id="viewGrid" title="그리드 보기">⊞</button>
         <button class="view-btn" id="viewList" title="리스트 보기">☰</button>
       </div>
+
+      <button class="fav-filter-btn" id="favFilterBtn" title="즐겨찾기 모아보기" aria-pressed="false">
+        <span>⭐</span> <span class="fav-filter-text">즐겨찾기만</span> <span class="fav-filter-count" id="favFilterCount">0</span>
+      </button>
+
+      <button class="mobile-filter-toggle" id="mobileFilterToggle" aria-label="모바일 필터 토글" aria-expanded="false">
+        <span>⚡ 필터</span> <span class="mobile-filter-count" id="mobileFilterBadge"></span>
+      </button>
     </div>
 
     <!-- Active Filter Pills -->
@@ -125,6 +133,26 @@
 
   </main>
 </div>
+
+<!-- ===== FOOTER ===== -->
+<footer class="site-footer" role="contentinfo">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <span class="footer-logo">🎨 Design Systems Explorer</span>
+      <p class="footer-desc">교사·학생·바이브코더를 위한 원클릭 디자인 시스템 AI 프롬프트 허브</p>
+    </div>
+    <div class="footer-links">
+      <div class="footer-item">
+        <span>출처 데이터:</span>
+        <a href="https://github.com/alexpate/awesome-design-systems" target="_blank" rel="noopener noreferrer">alexpate/awesome-design-systems</a> (MIT License)
+      </div>
+      <div class="footer-item">
+        <span>공식 배포:</span>
+        <a href="https://awesome-design-orcin.vercel.app" target="_blank" rel="noopener noreferrer">awesome-design-orcin.vercel.app</a>
+      </div>
+    </div>
+  </div>
+</footer>
 
 <!-- ===== MODAL ===== -->
 <div class="modal-overlay" id="modalOverlay" role="dialog" aria-modal="true" aria-label="디자인 시스템 상세 정보">

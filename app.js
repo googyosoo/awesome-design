@@ -3,13 +3,15 @@ let state = {
   search: '',
   activeVibes: new Set(),
   activeFeatures: new Set(),
+  onlyFavorites: false,
   sort: 'name',
   view: 'grid',
   filtered: [...DESIGN_SYSTEMS],
   theme: localStorage.getItem('theme') || 'dark',
   favorites: new Set(JSON.parse(localStorage.getItem('favorites') || '[]')),
   promptConfig: JSON.parse(localStorage.getItem('promptConfig') || '{"stack":"vanilla","tailwind":false,"typescript":false}'),
-  isLoading: false
+  isLoading: false,
+  mobileFilterOpen: false
 };
 
 // ===== DOM REFS =====
@@ -26,6 +28,11 @@ const clearBtn = document.getElementById('clearBtn');
 const modalOverlay = document.getElementById('modalOverlay');
 const toast = document.getElementById('toast');
 const themeToggle = document.getElementById('themeToggle');
+const favFilterBtn = document.getElementById('favFilterBtn');
+const favFilterCount = document.getElementById('favFilterCount');
+const mobileFilterToggle = document.getElementById('mobileFilterToggle');
+const mobileFilterBadge = document.getElementById('mobileFilterBadge');
+const sidebar = document.querySelector('.sidebar');
 
 // ===== INIT =====
 function init() {
@@ -94,7 +101,12 @@ function buildFeatureChips() {
 function applyFilters() {
   let results = [...DESIGN_SYSTEMS];
 
-  // Search
+  // Only Favorites Filter
+  if (state.onlyFavorites) {
+    results = results.filter(ds => state.favorites.has(ds.id));
+  }
+
+  // Search (이름, 회사, 설명, 분위기, 카테고리, 폰트 매칭)
   if (state.search) {
     const q = state.search.toLowerCase();
     results = results.filter(ds =>
@@ -102,7 +114,8 @@ function applyFilters() {
       ds.company.toLowerCase().includes(q) ||
       ds.description.toLowerCase().includes(q) ||
       ds.vibes.some(v => v.toLowerCase().includes(q)) ||
-      ds.category.toLowerCase().includes(q)
+      ds.category.toLowerCase().includes(q) ||
+      (ds.font && ds.font.toLowerCase().includes(q))
     );
   }
 
@@ -123,21 +136,12 @@ function applyFilters() {
   }
 
   // Favorites sorting priority
-  results.sort((a, b) => {
+  const favSort = (a, b) => {
     const aFav = state.favorites.has(a.id);
     const bFav = state.favorites.has(b.id);
     if (aFav && !bFav) return -1;
     if (!aFav && bFav) return 1;
     return 0;
-  });
-
-  // Main Sort
-  const favSort = (a, b) => {
-     const aFav = state.favorites.has(a.id);
-     const bFav = state.favorites.has(b.id);
-     if (aFav && !bFav) return -1;
-     if (!aFav && bFav) return 1;
-     return 0;
   };
 
   switch (state.sort) {
@@ -165,6 +169,7 @@ function updateUrl() {
   if (state.search) params.set('q', state.search);
   if (state.activeVibes.size > 0) params.set('vibe', [...state.activeVibes].join(','));
   if (state.activeFeatures.size > 0) params.set('feat', [...state.activeFeatures].join(','));
+  if (state.onlyFavorites) params.set('fav', '1');
   if (state.sort !== 'name') params.set('sort', state.sort);
   
   const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
@@ -182,6 +187,9 @@ function loadFromUrl() {
   }
   if (params.has('feat')) {
     params.get('feat').split(',').forEach(f => state.activeFeatures.add(f));
+  }
+  if (params.get('fav') === '1') {
+    state.onlyFavorites = true;
   }
   if (params.has('sort')) state.sort = params.get('sort');
 }
@@ -202,11 +210,27 @@ function renderCards() {
   }
 
   if (state.filtered.length === 0) {
+    if (state.onlyFavorites) {
+      cardGrid.innerHTML = `
+        <div class="empty-state" style="grid-column: 1/-1;">
+          <div class="empty-icon">⭐</div>
+          <div class="empty-title">즐겨찾기한 디자인 시스템이 없습니다</div>
+          <p class="empty-sub">마음에 드는 카드의 우측 상단 별표(⭐)를 눌러 나만의 디자인 시스템을 모아보세요!</p>
+          <button class="clear-btn" style="display:inline-block; margin-top:16px;" onclick="toggleFavoriteFilter()">
+            전체 디자인 시스템 보기
+          </button>
+        </div>
+      `;
+      return;
+    }
     cardGrid.innerHTML = `
       <div class="empty-state" style="grid-column: 1/-1;">
         <div class="empty-icon">🔍</div>
         <div class="empty-title">검색 결과 없음</div>
         <p class="empty-sub">다른 검색어나 필터를 사용해보세요.</p>
+        <button class="clear-btn" style="display:inline-block; margin-top:16px;" onclick="clearAllFilters()">
+          필터 전체 초기화
+        </button>
       </div>
     `;
     return;
@@ -228,7 +252,6 @@ function renderSkeletons() {
 
 function buildCard(ds) {
   const initials = getInitials(ds.name);
-  const bgColor = ds.colors[0] || '#6366f1';
   const paletteHtml = ds.colors.map(c =>
     `<div class="color-swatch" style="background:${c}"></div>`
   ).join('');
@@ -236,7 +259,7 @@ function buildCard(ds) {
     `<div class="color-dot" title="${c}" style="background:${c}"></div>`
   ).join('');
   const vibeTagsHtml = ds.vibes.slice(0, 3).map(v =>
-    `<span class="vibe-tag">${v}</span>`
+    `<button class="vibe-tag" onclick="event.stopPropagation(); toggleVibe('${v}')" title="'${v}' 분위기 필터 적용">${v}</button>`
   ).join('');
   const featuresHtml = ds.features.map(f =>
     `<span class="feature-badge">${FEATURE_LABELS[f]?.icon || '•'} ${FEATURE_LABELS[f]?.label || f}</span>`
@@ -251,7 +274,8 @@ function buildCard(ds) {
       <div class="color-palette">${paletteHtml}</div>
       <button class="card-favorite-btn ${isFav ? 'active' : ''}" 
               onclick="toggleFavorite(event, '${ds.id}')" 
-              title="즐겨찾기">
+              title="${isFav ? '즐겨찾기 해제' : '즐겨찾기 추가'}"
+              aria-label="${isFav ? '즐겨찾기 해제' : '즐겨찾기 추가'}">
         ${isFav ? '⭐' : '☆'}
       </button>
       <div class="card-visual">
@@ -263,8 +287,8 @@ function buildCard(ds) {
           <div class="card-company">${ds.company}</div>
         </div>
         <div class="card-links">
-          <a href="${linkUrl}" target="_blank" class="card-link" title="공식 사이트" onclick="event.stopPropagation()">🌐</a>
-          ${sourceUrl ? `<a href="${sourceUrl}" target="_blank" class="card-link" title="소스 코드" onclick="event.stopPropagation()">📂</a>` : ''}
+          <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" class="card-link" title="공식 사이트" onclick="event.stopPropagation()">🌐</a>
+          ${sourceUrl ? `<a href="${sourceUrl}" target="_blank" rel="noopener noreferrer" class="card-link" title="소스 코드" onclick="event.stopPropagation()">📂</a>` : ''}
         </div>
       </div>
       <div class="card-vibes">${vibeTagsHtml}</div>
@@ -272,11 +296,16 @@ function buildCard(ds) {
       <div class="color-dots">${dotsHtml}</div>
       <div class="card-features">${featuresHtml}</div>
       <div class="card-prompt-area">
-        <div class="prompt-label">AI 프롬프트</div>
-        <div class="prompt-box">${escapeHtml(ds.prompt.substring(0, 200))}</div>
-        <button class="copy-btn" onclick="copyPrompt(event, '${ds.id}', this)">
-          <span>📋</span> 프롬프트 복사
+        <button class="style-copy-btn" onclick="copyStylePrompt(event, '${ds.id}', this)" title="바이브코딩 최적화 완성형 프롬프트 즉시 복사">
+          <span class="btn-sparkle">✨</span> <strong>이 스타일로 만들어줘</strong>
         </button>
+        <div class="prompt-preview-wrap">
+          <div class="prompt-preview-head">
+            <span class="prompt-preview-label">AI 프롬프트 요약</span>
+            <span class="prompt-preview-action">클릭 시 전체 모달 보기</span>
+          </div>
+          <div class="prompt-box">${escapeHtml(ds.prompt.substring(0, 150))}...</div>
+        </div>
       </div>
     </div>
   `;
@@ -309,9 +338,17 @@ function renderActiveFilters() {
 }
 
 function updateResultCount() {
-  resultCount.innerHTML = `<strong>${state.filtered.length}</strong> / ${DESIGN_SYSTEMS.length}개 표시`;
+  const countText = state.onlyFavorites
+    ? `⭐ 즐겨찾기 <strong>${state.filtered.length}</strong>개 표시 (총 ${state.favorites.size}개)`
+    : `<strong>${state.filtered.length}</strong> / ${DESIGN_SYSTEMS.length}개 표시`;
+  resultCount.innerHTML = countText;
+
   const totalEl = document.getElementById('totalCount');
   if (totalEl) totalEl.textContent = DESIGN_SYSTEMS.length;
+
+  if (favFilterCount) {
+    favFilterCount.textContent = state.favorites.size;
+  }
 }
 
 function updateFilterUI() {
@@ -321,7 +358,20 @@ function updateFilterUI() {
   document.querySelectorAll('.feature-chip').forEach(chip => {
     chip.classList.toggle('active', state.activeFeatures.has(chip.dataset.feature));
   });
-  clearBtn.style.display = (state.activeVibes.size > 0 || state.activeFeatures.size > 0) ? 'block' : 'none';
+  
+  if (favFilterBtn) {
+    favFilterBtn.classList.toggle('active', state.onlyFavorites);
+    favFilterBtn.setAttribute('aria-pressed', state.onlyFavorites ? 'true' : 'false');
+  }
+
+  // Mobile badge
+  const totalActiveFilters = state.activeVibes.size + state.activeFeatures.size + (state.onlyFavorites ? 1 : 0);
+  if (mobileFilterBadge) {
+    mobileFilterBadge.textContent = totalActiveFilters > 0 ? totalActiveFilters : '';
+    mobileFilterBadge.style.display = totalActiveFilters > 0 ? 'inline-block' : 'none';
+  }
+
+  clearBtn.style.display = (state.activeVibes.size > 0 || state.activeFeatures.size > 0 || state.onlyFavorites || state.search) ? 'block' : 'none';
 }
 
 // ===== MODAL =====
@@ -335,13 +385,13 @@ function openModal(id) {
     `<div class="modal-palette-swatch" style="background:${c}"></div>`
   ).join('');
   const colorItemsHtml = ds.colors.map(c => `
-    <div class="modal-color-item" onclick="copyHex(event, '${c}')">
+    <div class="modal-color-item" onclick="copyHex(event, '${c}')" title="클릭하여 Hex 코드 복사">
       <div class="modal-color-swatch" style="background:${c}"></div>
       <span class="modal-color-hex">${c}</span>
     </div>
   `).join('');
   const vibeTagsHtml = ds.vibes.map(v =>
-    `<span class="modal-vibe-tag">${v}</span>`
+    `<button class="modal-vibe-tag" onclick="closeModal(); toggleVibe('${v}')" title="'${v}' 필터 적용">${v}</button>`
   ).join('');
   const featuresHtml = ds.features.map(f =>
     `<div class="modal-feature-item">${FEATURE_LABELS[f]?.icon || '•'} ${FEATURE_LABELS[f]?.label || f}</div>`
@@ -350,15 +400,15 @@ function openModal(id) {
   modal.innerHTML = `
     <div class="modal-palette">${paletteHtml}</div>
     <div class="modal-body" style="position:relative">
-      <button class="modal-close" onclick="closeModal()">✕</button>
+      <button class="modal-close" onclick="closeModal()" aria-label="모달 닫기">✕</button>
       <div class="modal-top">
         <div class="modal-brand" style="background: linear-gradient(135deg, ${ds.colors[0]}, ${ds.colors[1] || ds.colors[0]})">${initials}</div>
         <div class="modal-title">
           <div class="modal-name">${ds.name}</div>
           <div class="modal-company">by ${ds.company}</div>
           <div class="modal-action-links">
-            ${ds.url ? `<a href="${ds.url}" target="_blank" class="modal-link">🌐 공식 사이트</a>` : ''}
-            ${ds.source ? `<a href="${ds.source}" target="_blank" class="modal-link">📂 소스 코드</a>` : ''}
+            ${ds.url ? `<a href="${ds.url}" target="_blank" rel="noopener noreferrer" class="modal-link">🌐 공식 사이트</a>` : ''}
+            ${ds.source ? `<a href="${ds.source}" target="_blank" rel="noopener noreferrer" class="modal-link">📂 소스 코드</a>` : ''}
           </div>
         </div>
       </div>
@@ -369,18 +419,18 @@ function openModal(id) {
       </div>
 
       <div class="modal-section">
-        <div class="modal-section-title">분위기 태그</div>
+        <div class="modal-section-title">분위기 태그 (클릭 시 필터)</div>
         <div class="modal-vibes-wrap">${vibeTagsHtml}</div>
       </div>
 
       <div class="modal-section">
-        <div class="modal-section-title">컬러 팔레트</div>
+        <div class="modal-section-title">컬러 팔레트 (클릭 시 Hex 복사)</div>
         <div class="modal-colors">${colorItemsHtml}</div>
       </div>
 
       ${ds.font ? `
       <div class="modal-section">
-        <div class="modal-section-title">主 폰트</div>
+        <div class="modal-section-title">대표 폰트</div>
         <p class="modal-desc" style="font-family:monospace">${ds.font}</p>
       </div>` : ''}
 
@@ -390,28 +440,32 @@ function openModal(id) {
       </div>
 
       <div class="modal-section">
-        <div class="modal-section-title">🤖 바이브코딩 AI 프롬프트</div>
+        <div class="modal-section-title">🤖 바이브코딩 최적화 프롬프트 생성기</div>
         
         <!-- Customizer UI -->
         <div class="customizer-box">
-          <div class="customizer-title">⚡ 프롬프트 커스터마이징</div>
+          <div class="customizer-title">⚡ 프롬프트 기술 스택 커스터마이징 (전역 유지)</div>
           <div class="opt-group">
-            <div class="opt-label">기본 스택</div>
+            <div class="opt-label">기본 스택 선택</div>
             <button class="opt-btn ${state.promptConfig.stack === 'vanilla' ? 'active' : ''}" onclick="updateConfig('stack', 'vanilla', '${ds.id}')">Vanilla JS</button>
             <button class="opt-btn ${state.promptConfig.stack === 'react' ? 'active' : ''}" onclick="updateConfig('stack', 'react', '${ds.id}')">React</button>
             <button class="opt-btn ${state.promptConfig.stack === 'vue' ? 'active' : ''}" onclick="updateConfig('stack', 'vue', '${ds.id}')">Vue</button>
           </div>
           <div class="opt-group">
-            <div class="opt-label">추가 옵션</div>
+            <div class="opt-label">추가 스타일링 & 언어 옵션</div>
             <button class="opt-btn ${state.promptConfig.tailwind ? 'active' : ''}" onclick="updateConfig('tailwind', !state.promptConfig.tailwind, '${ds.id}')">Tailwind CSS</button>
             <button class="opt-btn ${state.promptConfig.typescript ? 'active' : ''}" onclick="updateConfig('typescript', !state.promptConfig.typescript, '${ds.id}')">TypeScript</button>
           </div>
         </div>
 
-        <div class="modal-prompt-box ${isCustomized() ? 'customized' : ''}" id="modalPromptText">${escapeHtml(generateCustomPrompt(ds.prompt))}</div>
+        <div class="modal-prompt-box ${isCustomized() ? 'customized' : ''}" id="modalPromptText">${escapeHtml(buildFullPrompt(ds))}</div>
         <button class="modal-copy-btn" id="modalCopyBtn" onclick="copyModalPrompt('${ds.id}')">
-          <span>📋</span> 복사하기 (커스텀 적용됨)
+          <span>✨</span> "이 스타일로 만들어줘" 완성형 프롬프트 복사
         </button>
+      </div>
+
+      <div class="modal-footer-credit">
+        출처: alexpate/awesome-design-systems · ${ds.company} ${ds.name}
       </div>
     </div>
   `;
@@ -425,23 +479,62 @@ function closeModal() {
   document.body.style.overflow = '';
 }
 
-// ===== COPY =====
-async function copyPrompt(e, id, btn) {
-  e.stopPropagation();
-  const ds = DESIGN_SYSTEMS.find(d => d.id === id);
-  if (!ds) return;
-  await copyToClipboard(ds.prompt, btn);
+// ===== PROMPT GENERATION ENGINE =====
+function buildFullPrompt(ds) {
+  const { stack, tailwind, typescript } = state.promptConfig;
+  
+  let stackDetails = '';
+  if (stack === 'react') {
+    stackDetails += '- 프레임워크: React 최신 함수형 컴포넌트 (Hooks: useState, useEffect, useMemo 활용)\n';
+  } else if (stack === 'vue') {
+    stackDetails += '- 프레임워크: Vue 3 Composition API (<script setup> 방식)\n';
+  } else {
+    stackDetails += '- 프레임워크: 순수 모던 HTML5, CSS3, ES6+ JavaScript (별도 빌드 도구 없이 브라우저에서 즉시 실행)\n';
+  }
+
+  if (tailwind) {
+    stackDetails += '- 스타일링: Tailwind CSS 유틸리티 클래스 전면 적용 (반응형 및 테마 클래스 사용)\n';
+  } else {
+    stackDetails += '- 스타일링: CSS Custom Properties(Variables)를 활용한 체계적 디자인 시스템 토큰 구축\n';
+  }
+
+  if (typescript) {
+    stackDetails += '- 언어: TypeScript 엄격 모드 (모든 Props, State, 컴포넌트 인터페이스 완벽 명시)\n';
+  }
+
+  const primaryColor = ds.colors[0] || '#2563eb';
+  const secondaryColor = ds.colors[1] || '#ffffff';
+  const otherColors = ds.colors.slice(2).join(', ') || '중립 그레이톤(#f3f4f6, #1f2937)';
+  const fontFam = ds.font || 'Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+
+  return `[역할 정의]
+당신은 세계 최고 수준의 프론트엔드 UI/UX 엔지니어이자 디자인 시스템 전문가입니다.
+
+[디자인 시스템 스타일 요청]
+아래 명시된 "${ds.name} (${ds.company})" 디자인 시스템의 시각적 언어와 철학을 계승하여 완성도 높은 반응형 웹 UI를 구현해주세요.
+
+1. 디자인 시스템 정보:
+- 시스템 명칭: ${ds.name} (소속/제작: ${ds.company})
+- 디자인 분위기(Vibe): ${ds.vibes.join(', ')} (카테고리: ${ds.category})
+- 기본 개요: ${ds.description}
+
+2. 시각 디자인 가이드라인:
+- 메인 브랜드 컬러(Primary): ${primaryColor}
+- 보조 배경/서브 컬러(Secondary): ${secondaryColor}
+- 추가 악센트 컬러: ${otherColors}
+- 대표 타이포그래피: ${fontFam}
+- 핵심 스타일 지침:
+${ds.prompt}
+
+3. 구현 기술 스택:
+${stackDetails}
+4. 필수 구현 요구사항 (바이브코딩 최적화):
+- 레이아웃: 모바일(390px 스마트폰)부터 데스크톱(1440px)까지 오버플로우 없이 유려하게 동작하는 완전 반응형 레이아웃을 작성하세요.
+- 컴포넌트 완성도: 헤더(로고/네비게이션), 히어로 섹션, 주요 기능 인터랙티브 카드 그리드, 상세 모달 또는 폼, 푸터를 모두 포함한 완전한 단일 코드로 작성하세요.
+- 접근성 & 품질: WCAG AA 명도 대비 준수, 키보드 포커스 링, 적절한 hover/active 전환 애니메이션, ARIA 레이블을 철저히 적용하세요.
+- 출력 형식: 코드 설명 없이 복사해서 바로 실행할 수 있는 완성된 코드를 제시해주세요.`;
 }
 
-async function copyModalPrompt(id) {
-  const ds = DESIGN_SYSTEMS.find(d => d.id === id);
-  if (!ds) return;
-  const btn = document.getElementById('modalCopyBtn');
-  const customizedPrompt = generateCustomPrompt(ds.prompt);
-  await copyToClipboard(customizedPrompt, btn);
-}
-
-// ===== PROMPT LOGIC =====
 function isCustomized() {
   const c = state.promptConfig;
   return c.stack !== 'vanilla' || c.tailwind || c.typescript;
@@ -450,31 +543,32 @@ function isCustomized() {
 function updateConfig(key, value, dsId) {
   state.promptConfig[key] = value;
   localStorage.setItem('promptConfig', JSON.stringify(state.promptConfig));
-  
-  // Re-open/update modal content if open
   openModal(dsId); 
 }
 
-function generateCustomPrompt(base) {
-  let extra = "\n\n### Additional Requirements:\n";
-  const { stack, tailwind, typescript } = state.promptConfig;
-  
-  if (stack === 'react') {
-    extra += "- Implement using React functional components.\n- Use modern Hooks (useState, useEffect).\n";
-  } else if (stack === 'vue') {
-    extra += "- Implement using Vue 3 Composition API.\n";
-  }
+// ===== COPY FUNCTIONS =====
+async function copyStylePrompt(e, id, btn) {
+  e.stopPropagation();
+  const ds = DESIGN_SYSTEMS.find(d => d.id === id);
+  if (!ds) return;
+  const promptText = buildFullPrompt(ds);
+  await copyToClipboard(promptText, btn);
+}
 
-  if (tailwind) {
-    extra += "- Use Tailwind CSS utility classes for all styling.\n- Do not use custom CSS files unless necessary.\n";
-  }
+async function copyPrompt(e, id, btn) {
+  e.stopPropagation();
+  const ds = DESIGN_SYSTEMS.find(d => d.id === id);
+  if (!ds) return;
+  const promptText = buildFullPrompt(ds);
+  await copyToClipboard(promptText, btn);
+}
 
-  if (typescript) {
-    extra += "- Use TypeScript for all logic.\n- Define clear interfaces for props and states.\n";
-  }
-
-  if (!tailwind && !typescript && stack === 'vanilla') return base;
-  return base + extra;
+async function copyModalPrompt(id) {
+  const ds = DESIGN_SYSTEMS.find(d => d.id === id);
+  if (!ds) return;
+  const btn = document.getElementById('modalCopyBtn');
+  const customizedPrompt = buildFullPrompt(ds);
+  await copyToClipboard(customizedPrompt, btn);
 }
 
 async function copyHex(e, hex) {
@@ -483,16 +577,35 @@ async function copyHex(e, hex) {
   showToast(`색상 코드 ${hex}가 복사되었습니다!`);
 }
 
-// ===== FAVORITES =====
+// ===== FAVORITES & FILTERS =====
 function toggleFavorite(e, id) {
   e.stopPropagation();
   if (state.favorites.has(id)) {
     state.favorites.delete(id);
+    showToast('즐겨찾기에서 제거되었습니다.');
   } else {
     state.favorites.add(id);
+    showToast('즐겨찾기에 추가되었습니다! ⭐');
   }
   localStorage.setItem('favorites', JSON.stringify([...state.favorites]));
   render();
+}
+
+function toggleFavoriteFilter() {
+  state.onlyFavorites = !state.onlyFavorites;
+  simulateLoading();
+  render();
+}
+
+function toggleMobileFilter() {
+  state.mobileFilterOpen = !state.mobileFilterOpen;
+  if (sidebar) {
+    sidebar.classList.toggle('mobile-open', state.mobileFilterOpen);
+  }
+  if (mobileFilterToggle) {
+    mobileFilterToggle.classList.toggle('active', state.mobileFilterOpen);
+    mobileFilterToggle.setAttribute('aria-expanded', state.mobileFilterOpen ? 'true' : 'false');
+  }
 }
 
 async function copyToClipboard(text, btn) {
@@ -500,16 +613,15 @@ async function copyToClipboard(text, btn) {
     await navigator.clipboard.writeText(text);
     if (btn) {
       const orig = btn.innerHTML;
-      btn.innerHTML = '<span>✅</span> 복사됨!';
+      btn.innerHTML = '<span>✅</span> 복사 완료!';
       btn.classList.add('copied');
       setTimeout(() => {
         btn.innerHTML = orig;
         btn.classList.remove('copied');
       }, 2000);
     }
-    showToast('프롬프트가 클립보드에 복사되었습니다! 🎉');
+    showToast('바이브코딩 최적화 프롬프트가 복사되었습니다! 🎉');
   } catch(err) {
-    // Fallback
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.position = 'fixed';
@@ -518,12 +630,12 @@ async function copyToClipboard(text, btn) {
     ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
-    showToast('복사됨!');
+    showToast('복사 완료!');
   }
 }
 
 function showToast(msg) {
-  toast.textContent = '✅ ' + msg;
+  toast.textContent = msg;
   toast.classList.add('visible');
   setTimeout(() => toast.classList.remove('visible'), 3000);
 }
@@ -555,14 +667,16 @@ function simulateLoading() {
   setTimeout(() => {
     state.isLoading = false;
     render();
-  }, 400);
+  }, 300);
 }
 
 function clearAllFilters() {
   state.activeVibes.clear();
   state.activeFeatures.clear();
+  state.onlyFavorites = false;
   state.search = '';
   searchInput.value = '';
+  simulateLoading();
   render();
 }
 
@@ -599,6 +713,16 @@ function bindEvents() {
     viewGrid.classList.remove('active');
     render();
   });
+
+  // Favorites Filter Button
+  if (favFilterBtn) {
+    favFilterBtn.addEventListener('click', toggleFavoriteFilter);
+  }
+
+  // Mobile Filter Toggle Button
+  if (mobileFilterToggle) {
+    mobileFilterToggle.addEventListener('click', toggleMobileFilter);
+  }
 
   // Theme
   themeToggle.addEventListener('click', toggleTheme);
